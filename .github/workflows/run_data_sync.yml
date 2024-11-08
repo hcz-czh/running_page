@@ -44,6 +44,9 @@ env:
 
 jobs:
   sync:
+    permissions:
+      pages: write
+      id-token: write
     name: Sync
     runs-on: ubuntu-latest
     outputs:
