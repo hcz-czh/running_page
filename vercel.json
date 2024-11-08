@@ -3,5 +3,22 @@
     "deploymentEnabled": {
       "gh-pages": false
     }
-  }
+  },
+  "rewrites": [
+    {
+      "source": "/running_page/:path*",
+      "destination": "/:path*"
+    }
+  ],
+  "headers": [
+    {
+      "source": "/(.*)\\.js",
+      "headers": [
+        {
+          "key": "Content-Type",
+          "value": "application/javascript"
+        }
+      ]
+    }
+  ]
 }
