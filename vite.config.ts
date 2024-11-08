@@ -35,8 +35,7 @@ export default defineConfig({
       },
     }),
   ],
-  // base: process.env.PATH_PREFIX || '/',
-  base: '/running_page/',
+  base: process.env.PATH_PREFIX || '/',
   define: {
     "import.meta.env.VERCEL": JSON.stringify(process.env.VERCEL),
   },
