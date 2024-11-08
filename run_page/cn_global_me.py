@@ -1,0 +1,91 @@
+"""
+Python 3 API wrapper for Garmin Connect to get your statistics.
+Copy most code from https://github.com/cyberjunky/python-garminconnect
+"""
+
+import argparse
+import asyncio
+import logging
+import os
+import sys
+import time
+import traceback
+import zipfile
+from io import BytesIO
+
+import aiofiles
+import cloudscraper
+import garth
+import httpx
+from config import FIT_FOLDER, GPX_FOLDER, JSON_FILE, SQL_FILE, config
+from garmin_device_adaptor import wrap_device_info
+from garmin_sync import Garmin, get_downloaded_ids
+from garmin_sync import download_new_activities, gather_with_concurrency
+from synced_data_file_logger import load_synced_activity_list, save_synced_activity_list
+from utils import make_activities_file
+
+if __name__ == "__main__":
+    # Specify the secret strings directly in the code
+    secret_string_cn = "W3sib2F1dGhfdG9rZW4iOiAiZmJiZTBiOWUtY2I2Ni00YjU1LTgyM2QtMTE4YWE0ZDdmODM5IiwgIm9hdXRoX3Rva2VuX3NlY3JldCI6ICJWTDJheVVVMTNlVXJ3bmw3RElZeVdUdDNmRmFzSURWVndqbCIsICJtZmFfdG9rZW4iOiBudWxsLCAibWZhX2V4cGlyYXRpb25fdGltZXN0YW1wIjogbnVsbCwgImRvbWFpbiI6ICJnYXJtaW4uY24ifSwgeyJzY29wZSI6ICJDT01NVU5JVFlfQ09VUlNFX1JFQUQgR0FSTUlOUEFZX1dSSVRFIEdPTEZfQVBJX1JFQUQgQVRQX1JFQUQgR0hTX1NBTUQgR0hTX1VQTE9BRCBJTlNJR0hUU19SRUFEIENPTU1VTklUWV9DT1VSU0VfV1JJVEUgQ09OTkVDVF9XUklURSBHQ09GRkVSX1dSSVRFIEdBUk1JTlBBWV9SRUFEIERUX0NMSUVOVF9BTkFMWVRJQ1NfV1JJVEUgR09MRl9BUElfV1JJVEUgSU5TSUdIVFNfV1JJVEUgUFJPRFVDVF9TRUFSQ0hfUkVBRCBPTVRfQ0FNUEFJR05fUkVBRCBPTVRfU1VCU0NSSVBUSU9OX1JFQUQgR0NPRkZFUl9SRUFEIENPTk5FQ1RfUkVBRCBBVFBfV1JJVEUiLCAianRpIjogIjE2YjAyYTNkLTQxM2EtNDlmMi1hZjM3LThhNjMzNjkxY2RkMCIsICJ0b2tlbl90eXBlIjogIkJlYXJlciIsICJhY2Nlc3NfdG9rZW4iOiAiZXlKaGJHY2lPaUpTVXpJMU5pSXNJblI1Y0NJNklrcFhWQ0lzSW10cFpDSTZJbVJwTFc5aGRYUm9MWE5wWjI1bGNpMXdjbTlrTFdOdU1TMHlNREkwTFhFeEluMC5leUp6WTI5d1pTSTZXeUpCVkZCZlVrVkJSQ0lzSWtGVVVGOVhVa2xVUlNJc0lrTlBUVTFWVGtsVVdWOURUMVZTVTBWZlVrVkJSQ0lzSWtOUFRVMVZUa2xVV1Y5RFQxVlNVMFZmVjFKSlZFVWlMQ0pEVDA1T1JVTlVYMUpGUVVRaUxDSkRUMDVPUlVOVVgxZFNTVlJGSWl3aVJGUmZRMHhKUlU1VVgwRk9RVXhaVkVsRFUxOVhVa2xVUlNJc0lrZEJVazFKVGxCQldWOVNSVUZFSWl3aVIwRlNUVWxPVUVGWlgxZFNTVlJGSWl3aVIwTlBSa1pGVWw5U1JVRkVJaXdpUjBOUFJrWkZVbDlYVWtsVVJTSXNJa2RJVTE5VFFVMUVJaXdpUjBoVFgxVlFURTlCUkNJc0lrZFBURVpmUVZCSlgxSkZRVVFpTENKSFQweEdYMEZRU1Y5WFVrbFVSU0lzSWtsT1UwbEhTRlJUWDFKRlFVUWlMQ0pKVGxOSlIwaFVVMTlYVWtsVVJTSXNJazlOVkY5RFFVMVFRVWxIVGw5U1JVRkVJaXdpVDAxVVgxTlZRbE5EVWtsUVZFbFBUbDlTUlVGRUlpd2lVRkpQUkZWRFZGOVRSVUZTUTBoZlVrVkJSQ0pkTENKcGMzTWlPaUpvZEhSd2N6b3ZMMlJwWVhWMGFDNW5ZWEp0YVc0dVkyNGlMQ0p5WlhadlkyRjBhVzl1WDJWc2FXZHBZbWxzYVhSNUlqcGJJa2RNVDBKQlRGOVRTVWRPVDFWVUlsMHNJbU5zYVdWdWRGOTBlWEJsSWpvaVZVNUVSVVpKVGtWRUlpd2laWGh3SWpveE56TXhNRFF4T0RNeUxDSnBZWFFpT2pFM016QTVOelkzTWprc0ltZGhjbTFwYmw5bmRXbGtJam9pT0RrMU56TXpPVFF0T0ROa01DMDBPRFkyTFdJNU1tVXRObVV5TXpFMk1HVTNZV1V6SWl3aWFuUnBJam9pTVRaaU1ESmhNMlF0TkRFellTMDBPV1l5TFdGbU16Y3RPR0UyTXpNMk9URmpaR1F3SWl3aVkyeHBaVzUwWDJsa0lqb2lSMEZTVFVsT1gwTlBUazVGUTFSZlRVOUNTVXhGWDBGT1JGSlBTVVJmUkVraWZRLm1qV0RNT0pucHRrZG1PNGdjMjJMVEJHUW50a2o5cWZoT2R1RXVpSnhQcnZNZ0pSWU82cFNUWTc2cUt5RU1uNjRKR0xCRkxQSVVJTlV5YWVuTTZpU0tqV1JKNUtVX3lZVUNPdG9CTlA5SzVVQml2ck1sVmFhX2l3bndOcm13SlVvMFA3WVN0N2Y4X3BJdzJWb3RsSy1VU3Z4Y1JCV1V2Z1BRa21VMFlVV0hjTWRscl9ZZ2xDVzJ6NmNra1Q0N3VhTXFnWUg4Tkl0T25KMzI2Y3hpRnF4Y09LQXBoSHE5d0dHcjR2dWJEcFkzYmFnZG0zTDhSWHpaZmlSR3dULVdzbFNYQ0dxY2E2elRmd3I1ZXlHUjRfOEc3aXlKQnRoYWxjS2V6QnZ2NXRfaEhZZ3BLelh0eXhYZEdLRzB4a1V6bXNFbGNCRmNhcFRQTTV3NEVWTHMwMVV0ZyIsICJyZWZyZXNoX3Rva2VuIjogImV5SnlaV1p5WlhOb1ZHOXJaVzVXWVd4MVpTSTZJalUyTkRCaU56TTBMVFZsTURVdE5HVXpNUzFoTW1Wa0xUUTBNVGs0WlRVMVpXWmlNQ0lzSW1kaGNtMXBia2QxYVdRaU9pSTRPVFUzTXpNNU5DMDRNMlF3TFRRNE5qWXRZamt5WlMwMlpUSXpNVFl3WlRkaFpUTWlmUT09IiwgImV4cGlyZXNfaW4iOiA2NTEwMiwgImV4cGlyZXNfYXQiOiAxNzMxMDQxODMxLCAicmVmcmVzaF90b2tlbl9leHBpcmVzX2luIjogMjU5MTk5OSwgInJlZnJlc2hfdG9rZW5fZXhwaXJlc19hdCI6IDE3MzM1Njg3Mjh9XQ=="
+    secret_string_global = "W3sib2F1dGhfdG9rZW4iOiAiZWE2MDMyN2MtM2ViZC00ZWM1LTg2NGUtMjczMTEwNWUxMWMxIiwgIm9hdXRoX3Rva2VuX3NlY3JldCI6ICJyWnRvaUU3dTZPS2o3U0Vyc3pOUjN5OTdyeXVpNDZGUHVtOCIsICJtZmFfdG9rZW4iOiBudWxsLCAibWZhX2V4cGlyYXRpb25fdGltZXN0YW1wIjogbnVsbCwgImRvbWFpbiI6ICJnYXJtaW4uY29tIn0sIHsic2NvcGUiOiAiQ09NTVVOSVRZX0NPVVJTRV9SRUFEIEdBUk1JTlBBWV9XUklURSBHT0xGX0FQSV9SRUFEIEFUUF9SRUFEIEdIU19TQU1EIEdIU19VUExPQUQgSU5TSUdIVFNfUkVBRCBDT01NVU5JVFlfQ09VUlNFX1dSSVRFIENPTk5FQ1RfV1JJVEUgR0NPRkZFUl9XUklURSBHQVJNSU5QQVlfUkVBRCBEVF9DTElFTlRfQU5BTFlUSUNTX1dSSVRFIEdPTEZfQVBJX1dSSVRFIElOU0lHSFRTX1dSSVRFIFBST0RVQ1RfU0VBUkNIX1JFQUQgT01UX0NBTVBBSUdOX1JFQUQgT01UX1NVQlNDUklQVElPTl9SRUFEIEdDT0ZGRVJfUkVBRCBDT05ORUNUX1JFQUQgQVRQX1dSSVRFIiwgImp0aSI6ICI4OTBhOTc3OS0zZmMxLTQ3ZGEtOTgzNy02ODUwMmVmMDJlNDEiLCAidG9rZW5fdHlwZSI6ICJCZWFyZXIiLCAiYWNjZXNzX3Rva2VuIjogImV5SmhiR2NpT2lKU1V6STFOaUlzSW5SNWNDSTZJa3BYVkNJc0ltdHBaQ0k2SW1ScExXOWhkWFJvTFhOcFoyNWxjaTF3Y205a0xUSXdNalF0Y1RFaWZRLmV5SnpZMjl3WlNJNld5SkJWRkJmVWtWQlJDSXNJa0ZVVUY5WFVrbFVSU0lzSWtOUFRVMVZUa2xVV1Y5RFQxVlNVMFZmVWtWQlJDSXNJa05QVFUxVlRrbFVXVjlEVDFWU1UwVmZWMUpKVkVVaUxDSkRUMDVPUlVOVVgxSkZRVVFpTENKRFQwNU9SVU5VWDFkU1NWUkZJaXdpUkZSZlEweEpSVTVVWDBGT1FVeFpWRWxEVTE5WFVrbFVSU0lzSWtkQlVrMUpUbEJCV1Y5U1JVRkVJaXdpUjBGU1RVbE9VRUZaWDFkU1NWUkZJaXdpUjBOUFJrWkZVbDlTUlVGRUlpd2lSME5QUmtaRlVsOVhVa2xVUlNJc0lrZElVMTlUUVUxRUlpd2lSMGhUWDFWUVRFOUJSQ0lzSWtkUFRFWmZRVkJKWDFKRlFVUWlMQ0pIVDB4R1gwRlFTVjlYVWtsVVJTSXNJa2xPVTBsSFNGUlRYMUpGUVVRaUxDSkpUbE5KUjBoVVUxOVhVa2xVUlNJc0lrOU5WRjlEUVUxUVFVbEhUbDlTUlVGRUlpd2lUMDFVWDFOVlFsTkRVa2xRVkVsUFRsOVNSVUZFSWl3aVVGSlBSRlZEVkY5VFJVRlNRMGhmVWtWQlJDSmRMQ0pwYzNNaU9pSm9kSFJ3Y3pvdkwyUnBZWFYwYUM1bllYSnRhVzR1WTI5dElpd2ljbVYyYjJOaGRHbHZibDlsYkdsbmFXSnBiR2wwZVNJNld5SkhURTlDUVV4ZlUwbEhUazlWVkNKZExDSmpiR2xsYm5SZmRIbHdaU0k2SWxWT1JFVkdTVTVGUkNJc0ltVjRjQ0k2TVRjek1UQTJNalEyTVN3aWFXRjBJam94TnpNd09UYzJOelkwTENKbllYSnRhVzVmWjNWcFpDSTZJbVF6WmpNeVpUVTVMVFZoTWpJdE5EbGxOQzFoWkdNeUxXUTVPR0l4WXpGbE1HRmhNU0lzSW1wMGFTSTZJamc1TUdFNU56YzVMVE5tWXpFdE5EZGtZUzA1T0RNM0xUWTROVEF5WldZd01tVTBNU0lzSW1Oc2FXVnVkRjlwWkNJNklrZEJVazFKVGw5RFQwNU9SVU5VWDAxUFFrbE1SVjlCVGtSU1QwbEVYMFJKSW4wLmJ1ODd4Qi1oSU1OYWF0QW9jLUVWTUxJY19pcnREcFA4ZUV0Ymp2Wlpsa0JxLWNXOHdwdEpHVG5wcllZdzVtTlNrbGlWYkQzREVWTmtPdU02M2VBOVEycUlJOVk0YjNKNjFIUEd5QUg0dmtkcERjS0hpOFczeS1iWVRzdXBLY0J6ZVBnZFJkVXJLX3JOOW9xalNKUEZpTGVLaXktdkpQYUtkRHdMcklJRUthaWVMUk91OHp3MWswMTF5VTN1OVd2THdReDJaMFVkYUZOX3FtTHNHdVFXRE5jNTE5di0zT29HT2Y5TGFRQVFYeXVUY2NfSTlWRThzM2xET1lLeGdSOVllb29meGhVRElrZTNXRGEzVmFNc3V6Z0RUaU12WG42MFBlRklhTGVPQ3pmdHFZWkdDUzRlRGthRERoWTZqdmtieGJ3TVZJTVdsUy1CUjhnbTF0VWpaQSIsICJyZWZyZXNoX3Rva2VuIjogImV5SnlaV1p5WlhOb1ZHOXJaVzVXWVd4MVpTSTZJbVUyWTJGbU9USTFMVFU1WVRZdE5HVTJPQzFpTldFeExUVTFOekV3TldRNFl6azBOeUlzSW1kaGNtMXBia2QxYVdRaU9pSmtNMll6TW1VMU9TMDFZVEl5TFRRNVpUUXRZV1JqTWkxa09UaGlNV014WlRCaFlURWlmUT09IiwgImV4cGlyZXNfaW4iOiA4NTY5NiwgImV4cGlyZXNfYXQiOiAxNzMxMDYyNDYwLCAicmVmcmVzaF90b2tlbl9leHBpcmVzX2luIjogMjU5MTk5OSwgInJlZnJlc2hfdG9rZW5fZXhwaXJlc19hdCI6IDE3MzM1Njg3NjN9XQ=="
+
+    auth_domain = "CN"
+    is_only_running = False  # Set to True if only running activities are needed
+
+    if not secret_string_cn or not secret_string_global:
+        print("Missing secret strings in the code")
+        sys.exit(1)
+
+    # Step 1:
+    # Sync all activities from Garmin CN to Garmin Global in FIT format
+    # If the activity is manually imported with a GPX, the GPX file will be synced
+
+    # load synced activity list
+    synced_activity = load_synced_activity_list()
+
+    folder = FIT_FOLDER
+    # make gpx or tcx dir
+    if not os.path.exists(folder):
+        os.mkdir(folder)
+
+    new_ids = asyncio.run(
+        download_new_activities(
+            secret_string_cn,
+            auth_domain,
+            synced_activity,
+            is_only_running,
+            folder,
+            "fit",
+        )
+    )
+
+
+    to_upload_files = []
+    for i in new_ids:
+        if os.path.exists(os.path.join(FIT_FOLDER, f"{i}.fit")):
+            # upload fit files
+            to_upload_files.append(os.path.join(FIT_FOLDER, f"{i}.fit"))
+        elif os.path.exists(os.path.join(GPX_FOLDER, f"{i}.gpx")):
+            # upload gpx files which are manually uploaded to garmin connect
+            to_upload_files.append(os.path.join(GPX_FOLDER, f"{i}.gpx"))
+
+    print("Files to sync:" + " ".join(to_upload_files))
+    garmin_global_client = Garmin(
+        secret_string_global,
+        config("sync", "garmin", "authentication_domain"),
+        is_only_running,
+    )
+    loop = asyncio.get_event_loop()
+    future = asyncio.ensure_future(
+        garmin_global_client.upload_activities_files(to_upload_files)
+    )
+    loop.run_until_complete(future)
+
+    # Save synced activity list for speeding up
+    synced_activity.extend(new_ids)
+    save_synced_activity_list(synced_activity)
+
+    # Step 2:
+    # Generate track from fit/gpx file
+    make_activities_file(SQL_FILE, GPX_FOLDER, JSON_FILE, file_suffix="gpx")
+    make_activities_file(SQL_FILE, FIT_FOLDER, JSON_FILE, file_suffix="fit")
