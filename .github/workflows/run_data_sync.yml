@@ -59,7 +59,7 @@ jobs:
         uses: actions/checkout@v4
         with:
               ref: main  # 或者你使用的分支
-              token: ${{ secrets.GITHUB_TOKEN }}  # 确保有权限访问仓库
+              token: ${{ secrets.TOKEN }}  # 确保有权限访问仓库
 
       - name: Set up Python
         id: setup_python
